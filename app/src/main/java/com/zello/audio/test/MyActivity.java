@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 public class MyActivity extends AppCompatActivity {
 
     // Config
-    static int SAMPLE_RATE_IN_HZ = 16000;
+    static int SAMPLE_RATE_IN_HZ = 44100;
     static int NUMBER_OF_SECONDS_TO_RECORD = 30;
 
     // Views
@@ -40,15 +40,16 @@ public class MyActivity extends AppCompatActivity {
 
     // Record Vars
     private AudioRecord recorder;
-    private short[] recordedData;
+    private short[] recordedData = new short[SAMPLE_RATE_IN_HZ*NUMBER_OF_SECONDS_TO_RECORD];
     private int recordIndex = 0;
-    private RecordAudioThread recorderThread;
+    private RecordAudioTask recorderTask;
+//    private RecordAudioThread recorderThread;
 
     // Playback Vars
-    private short[] playbackData;
     private AudioTrack playback;
     private int playbackIndex = 0;
-    private PlayAudioThread playbackThread;
+    private PlayAudioTask playAudioTask;
+//    private PlayAudioThread playbackThread;
 
 
     @Override
@@ -71,7 +72,7 @@ public class MyActivity extends AppCompatActivity {
         recordPlayhead.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                long timecode = (progress*1000)/SAMPLE_RATE_IN_HZ;
+                long timecode = (progress * 1000) / SAMPLE_RATE_IN_HZ;
                 recordTimecode.setText(formatTime(timecode));
             }
 
@@ -87,6 +88,7 @@ public class MyActivity extends AppCompatActivity {
         });
 
         playbackPlayhead = (SeekBar)findViewById(R.id.playbackPlayhead);
+        playbackPlayhead.setMax(NUMBER_OF_SECONDS_TO_RECORD*SAMPLE_RATE_IN_HZ);
         playbackPlayhead.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -110,27 +112,13 @@ public class MyActivity extends AppCompatActivity {
     @Override
     protected void onDestroy(){
         if (recorder != null) recorder.release();
-        if (playbackThread != null) playbackThread.interrupt();
-        if (recorderThread != null) recorderThread.interrupt();
+        if (playAudioTask != null) playAudioTask.cancel(true);
+        if (recorderTask != null) recorderTask.cancel(true);
+
+//        if (playbackThread != null) playbackThread.interrupt();
+//        if (recorderThread != null) recorderThread.interrupt();
 
         super.onDestroy();
-    }
-
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.menu_my, menu);
-        return true;
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        int id = item.getItemId();
-
-        if (id == R.id.action_settings) {
-            return true;
-        }
-
-        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -140,18 +128,12 @@ public class MyActivity extends AppCompatActivity {
             if (grantResults[recordAudioIndex] == PackageManager.PERMISSION_GRANTED){
                 recorder = createAudioRecord();
                 playback = createAudioTrack();
-
                 Log.d(String.valueOf(MyActivity.class), "Recorder Valid: " + String.valueOf(recorder.getState() == AudioRecord.STATE_INITIALIZED));
-
-
-                Log.d(String.valueOf(MyActivity.class), "Recorder: " + String.valueOf(recorder.getRecordingState() + "Playback: " + String.valueOf(playback.getPlayState())));
-
             }
             else{
                 Log.d(String.valueOf(MyActivity.class), "Permissions: Audio Recording Denied");
             }
         }
-
     }
 
     private String formatTime(long milliseconds){
@@ -166,26 +148,19 @@ public class MyActivity extends AppCompatActivity {
         int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
         int bufferSizeInBytes = AudioTrack.getMinBufferSize(SAMPLE_RATE_IN_HZ,channelConfig,audioFormat);
         int mode = AudioTrack.MODE_STREAM;
-        int streamType = AudioManager.USE_DEFAULT_STREAM_TYPE;
+        int streamType = AudioManager.STREAM_MUSIC;
 
         AudioTrack playback = new AudioTrack (streamType, SAMPLE_RATE_IN_HZ, channelConfig, audioFormat, bufferSizeInBytes, mode);
         return playback;
     }
 
     private AudioRecord createAudioRecord(){
-        int numberOfSeconds = NUMBER_OF_SECONDS_TO_RECORD;
         int audioSource = MediaRecorder.AudioSource.MIC;
         int channelConfig = AudioFormat.CHANNEL_IN_MONO;
         int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
         int bufferSizeInBytes = AudioRecord.getMinBufferSize(SAMPLE_RATE_IN_HZ, channelConfig, audioFormat);
 
         AudioRecord recorder = new AudioRecord(audioSource, SAMPLE_RATE_IN_HZ, channelConfig, audioFormat, bufferSizeInBytes);
-        recordedData = new short[SAMPLE_RATE_IN_HZ*numberOfSeconds];
-        recordPlayhead.setMax(recordedData.length);
-        playbackPlayhead.setMax(recordedData.length);
-
-        Log.d(String.valueOf(MyActivity.class), "recordedData.length:" + String.valueOf(recordedData.length));
-
         return recorder;
     }
 
@@ -214,9 +189,11 @@ public class MyActivity extends AppCompatActivity {
         }
 
         toggleRecord.setText(getResources().getString(R.string.record_button_stop));
+        recorderTask = new RecordAudioTask();
+        recorderTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
 
-        recorderThread = new RecordAudioThread();
-        recorderThread.start();
+//        recorderThread = new RecordAudioThread();
+//        recorderThread.start();
     }
 
     private void stopRecording() {
@@ -225,22 +202,27 @@ public class MyActivity extends AppCompatActivity {
         if (recorder != null) {
             recorder.stop();
         }
-        if (recorderThread != null){
-            recorderThread.interrupt();
+        if (recorderTask != null){
+            recorderTask.cancel(true);
         }
 
+//        if (recorderThread != null){
+//            recorderThread.interrupt();
+//        }
     }
 
     private void startPlaying(){
-        togglePlayback.setText(getResources().getString(R.string.play_button_stop));
 
         if (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
             stopPlaying();
         }
 
-        playbackData = recordedData.clone();
-        playbackThread = new PlayAudioThread();
-        playbackThread.start();
+        togglePlayback.setText(getResources().getString(R.string.play_button_stop));
+        playAudioTask = new PlayAudioTask();
+        playAudioTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+
+//        playbackThread = new PlayAudioThread();
+//        playbackThread.start();
     }
 
     private void stopPlaying(){
@@ -249,19 +231,53 @@ public class MyActivity extends AppCompatActivity {
         if (playback != null) {
             playback.pause();
         }
-        if (playbackThread != null){
-            playbackThread.interrupt();
+        if (playAudioTask != null){
+            playAudioTask.cancel(true);
+        }
+
+
+//        if (playbackThread != null){
+//            playbackThread.interrupt();
+//        }
+    }
+
+
+    class PlayAudioTask extends AsyncTask<Void, Void, Void>{
+
+        protected Void doInBackground(Void... params) {
+            Log.d(String.valueOf(MyActivity.class), "PlayAudioTask");
+
+            playback.play();
+            int buffer = 0;
+            while (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING){
+                buffer = playback.getBufferSizeInFrames();
+                if (playbackIndex + buffer > recordedData.length){
+                    buffer = recordedData.length - playbackIndex;
+                }
+                // writing to the AudioTrack prevents the AudioRecord from reading
+                playbackIndex += playback.write(recordedData, playbackIndex, buffer, AudioTrack.WRITE_NON_BLOCKING);
+                // playbackIndex++; // note: multithreading works if we manually increment the playback index (requires commenting out line above)
+
+                if(playbackIndex >= recordedData.length){
+                    playbackIndex = 0;
+                }
+                publishProgress();
+            }
+            playback.pause();
+
+            return null;
+        }
+
+        protected void onProgressUpdate(Void... progress) {
+            playbackPlayhead.setProgress(playbackIndex);
         }
     }
 
-    class RecordAudioThread extends Thread {
+    private class RecordAudioTask extends AsyncTask<Void, Void, Void> {
+        protected Void doInBackground(Void... params) {
+            Log.d(String.valueOf(MyActivity.class), "RecordAudioTask");
 
-        @Override
-        public void run() {
-            Log.d(String.valueOf(MyActivity.class), "RecordAudioThread");
             recorder.startRecording();
-            Log.d(String.valueOf(MyActivity.class), "recorder.startRecording()");
-
             int buffer = 0;
             while (recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING){
                 buffer = recorder.getBufferSizeInFrames();
@@ -272,78 +288,38 @@ public class MyActivity extends AppCompatActivity {
                 if (recordIndex >= recordedData.length){
                     recordIndex = 0;
                 }
+
                 publishProgress();
             }
 
             recorder.stop();
+            return null;
         }
 
-        protected void publishProgress() {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    recordPlayhead.setProgress(recordIndex);
-
-                }
-            });
+        protected void onProgressUpdate(Void... progress) {
+            recordPlayhead.setProgress(recordIndex);
         }
     }
 
-    class PlayAudioThread extends Thread{
-        @Override
-        public void run() {
-            Log.d(String.valueOf(MyActivity.class), "PlayAudioThread");
-            playback.play();
-            Log.d(String.valueOf(MyActivity.class), "playback.play");
-
-            int buffer = 0;
-            while (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING){
-                buffer = playback.getBufferSizeInFrames();
-                if (playbackIndex + buffer > recordedData.length){
-                    buffer = recordedData.length - playbackIndex;
-                }
-                playbackIndex += playback.write(playbackData, playbackIndex, buffer, AudioTrack.WRITE_NON_BLOCKING);
-                if(playbackIndex >= playbackData.length){
-                    playbackIndex = 0;
-                }
-                publishProgress();
-            }
-        }
-
-        protected void publishProgress() {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    playbackPlayhead.setProgress(playbackIndex);
-                }
-            });
-        }
-    }
 
 //    class RecordAudioThread extends Thread {
 //
 //        @Override
 //        public void run() {
 //            Log.d(String.valueOf(MyActivity.class), "RecordAudioThread");
-//
-//            int bufferSize = recorder.getBufferSizeInFrames();
-//            short[] audioData = new short[bufferSize];
-//
 //            recorder.startRecording();
 //            Log.d(String.valueOf(MyActivity.class), "recorder.startRecording()");
 //
-//            while (recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING)
-//            {
-//                recorder.read(audioData, 0, bufferSize);
-//
-//                for (int i=0; i<audioData.length; i++){
-//                    if(recordIndex == recordedData.length){
-//                        recordIndex = 0;
-//                    }
-//                    recordedData[recordIndex] = audioData[i];
-//                    recordIndex++;
+//            int buffer = 0;
+//            while (recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING){
+//                buffer = recorder.getBufferSizeInFrames();
+//                if (recordIndex + buffer > recordedData.length){
+//                    buffer = recordedData.length - recordIndex;
 //                }
-//                Log.d(String.valueOf(MyActivity.class), "recordIndex:" + String.valueOf(recordIndex));
+//                recordIndex += recorder.read(recordedData, recordIndex, buffer);
+//                if (recordIndex >= recordedData.length){
+//                    recordIndex = 0;
+//                }
 //
 //                publishProgress();
 //            }
@@ -356,7 +332,6 @@ public class MyActivity extends AppCompatActivity {
 //                @Override
 //                public void run() {
 //                    recordPlayhead.setProgress(recordIndex);
-//
 //                }
 //            });
 //        }
@@ -366,22 +341,25 @@ public class MyActivity extends AppCompatActivity {
 //        @Override
 //        public void run() {
 //            Log.d(String.valueOf(MyActivity.class), "PlayAudioThread");
-//            int bufferSize = recorder.getBufferSizeInFrames();
-//
 //            playback.play();
 //            Log.d(String.valueOf(MyActivity.class), "playback.play");
 //
-//            while (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING)
-//            {
+//            int buffer = 0;
+//            while (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING){
+//                buffer = playback.getBufferSizeInFrames();
+//                if (playbackIndex + buffer > recordedData.length){
+//                    buffer = recordedData.length - playbackIndex;
+//                }
+//                // writing to the AudioTrack prevents the AudioRecord from reading
+//                playbackIndex += playback.write(recordedData, playbackIndex, buffer, AudioTrack.WRITE_NON_BLOCKING);
+//                // playbackIndex++; // note: multithreading works if we manually increment the playback index (requires commenting out line above)
+//
 //                if(playbackIndex >= recordedData.length){
 //                    playbackIndex = 0;
 //                }
-//                playbackIndex += playback.write(recordedData, playbackIndex, bufferSize);
-//                Log.d(String.valueOf(MyActivity.class), "playbackIndex:" + String.valueOf(playbackIndex));
-//
-//
 //                publishProgress();
 //            }
+//            playback.pause();
 //        }
 //
 //        protected void publishProgress() {
@@ -393,70 +371,6 @@ public class MyActivity extends AppCompatActivity {
 //            });
 //        }
 //    }
-
-
-
-//    class PlayAudioTask extends AsyncTask<Void, Void, Void>{
-//
-//        protected Void doInBackground(Void... params) {
-//            Log.d(String.valueOf(MyActivity.class), "PlayAudioTask");
-//            int bufferSize = playback.getBufferSizeInFrames();
-//
-//            int offset = 0;
-//            playback.play();
-//            Log.d(String.valueOf(MyActivity.class), "playback.play()");
-//
-//            while (playback.getPlayState() == AudioTrack.PLAYSTATE_PLAYING)
-//            {
-//                if(playbackIndex == recordedData.length){
-//                    playbackIndex = 0;
-//                }
-//                playbackIndex += playback.write(recordedData, playbackIndex, bufferSize, AudioTrack.WRITE_NON_BLOCKING);
-//
-//                publishProgress();
-//            }
-//            return null;
-//        }
-//
-//        protected void onProgressUpdate(Void... progress) {
-//            playbackPlayhead.setProgress(playbackIndex);
-//        }
-//    }
-//
-//    private class RecordAudioTask extends AsyncTask<Void, Void, Void> {
-//        protected Void doInBackground(Void... params) {
-//            Log.d(String.valueOf(MyActivity.class), "RecordAudioTask");
-//
-//            int bufferSize = recorder.getBufferSizeInFrames();
-//            short[] audioData = new short[bufferSize];
-//
-//            recorder.startRecording();
-//            Log.d(String.valueOf(MyActivity.class), "recorder.startRecording()");
-//
-//            while (recorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING)
-//            {
-//                recorder.read(audioData, 0, bufferSize);
-//
-//                for (int i=0; i<audioData.length; i++){
-//                    if(recordIndex == recordedData.length){
-//                        recordIndex = 0;
-//                    }
-//                    recordedData[recordIndex] = audioData[i];
-//                    recordIndex++;
-//                }
-//
-//                publishProgress();
-//            }
-//
-//            recorder.stop();
-//            return null;
-//        }
-//
-//        protected void onProgressUpdate(Void... progress) {
-//            recordPlayhead.setProgress(recordIndex);
-//        }
-//    }
-
 
 
 }
